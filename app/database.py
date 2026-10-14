@@ -20,80 +20,18 @@ def get_db():
 
 def init_db() -> None:
     with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS otp_codes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email_hash TEXT NOT NULL,
-                otp_hash TEXT NOT NULL,
-                expires_at INTEGER NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                used INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email_hash);")
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS verified_sessions (
-                token_hash TEXT PRIMARY KEY,
-                email_hash TEXT NOT NULL,
-                expires_at INTEGER NOT NULL,
-                used INTEGER NOT NULL DEFAULT 0
-            )
-        """)
-
+        # Bảng lưu Confession (ẩn danh hoàn toàn)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS confessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT NOT NULL DEFAULT 'Tâm sự',
-                title TEXT NOT NULL DEFAULT 'Tâm sự ẩn danh',
                 content TEXT NOT NULL,
-                email_hash TEXT NOT NULL DEFAULT '',
-                likes_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
                 created_at INTEGER NOT NULL
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_confessions_status ON confessions(status, created_at DESC);")
 
-        # Tự động thêm cột mới nếu file confessions.db cũ chưa có
-        existing_cols = {
-            row["name"] for row in conn.execute("PRAGMA table_info(confessions);").fetchall()
-        }
-        if "category" not in existing_cols:
-            conn.execute("ALTER TABLE confessions ADD COLUMN category TEXT NOT NULL DEFAULT 'Tâm sự';")
-        if "title" not in existing_cols:
-            conn.execute("ALTER TABLE confessions ADD COLUMN title TEXT NOT NULL DEFAULT 'Tâm sự ẩn danh';")
-        if "email_hash" not in existing_cols:
-            conn.execute("ALTER TABLE confessions ADD COLUMN email_hash TEXT NOT NULL DEFAULT '';")
-        if "likes_count" not in existing_cols:
-            conn.execute("ALTER TABLE confessions ADD COLUMN likes_count INTEGER NOT NULL DEFAULT 0;")
-
-        # Bảng lưu lượt thả tim (chống spam thả tim trùng lặp theo IP/phiên)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS confession_likes (
-                confession_id INTEGER NOT NULL,
-                actor_hash TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                PRIMARY KEY (confession_id, actor_hash),
-                FOREIGN KEY(confession_id) REFERENCES confessions(id) ON DELETE CASCADE
-            )
-        """)
-
-        # Bảng lưu bình luận ẩn danh
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS comments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                confession_id INTEGER NOT NULL,
-                author_alias TEXT NOT NULL DEFAULT 'Một người bạn ẩn danh',
-                content TEXT NOT NULL,
-                likes INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL,
-                FOREIGN KEY(confession_id) REFERENCES confessions(id) ON DELETE CASCADE
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_confession ON comments(confession_id, created_at ASC);")
-
+        # Bảng đếm số bài đăng trong 24 giờ (tối đa 5 bài / ngày / người dùng)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rate_limits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,6 +41,7 @@ def init_db() -> None:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_id_time ON rate_limits(identifier, created_at);")
 
+        # Bảng tài khoản Quản trị ('owner' = Bạn, 'moderator' = Admin duyệt bài)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS admin_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,9 +87,7 @@ def init_db() -> None:
 
 def cleanup_expired_records() -> None:
     now = int(time.time())
-    ten_mins_ago = now - 600
+    one_day_ago = now - 86400  # 24 giờ
     with get_db() as conn:
-        conn.execute("DELETE FROM otp_codes WHERE expires_at < ?", (now,))
-        conn.execute("DELETE FROM verified_sessions WHERE expires_at < ?", (now,))
-        conn.execute("DELETE FROM rate_limits WHERE created_at < ?", (ten_mins_ago,))
+        conn.execute("DELETE FROM rate_limits WHERE created_at < ?", (one_day_ago,))
         conn.execute("DELETE FROM admin_sessions WHERE expires_at < ?", (now,))

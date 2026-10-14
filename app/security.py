@@ -32,10 +32,14 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     except Exception:
         return False
 
-def hash_email(email: str) -> str:
-    normalized = email.strip().lower().encode("utf-8")
+def hash_identifier(raw_id: str) -> str:
+    """
+    Băm địa chỉ IP / mã thiết bị kèm muối bí mật để đếm giới hạn 5 bài/ngày
+    mà không lưu IP thật của người gửi vào cơ sở dữ liệu.
+    """
+    normalized = raw_id.strip().lower().encode("utf-8")
     salt = settings.EMAIL_HASH_SALT.encode("utf-8")
-    dk = hashlib.pbkdf2_hmac("sha256", normalized, salt, 100_000)
+    dk = hashlib.pbkdf2_hmac("sha256", normalized, salt, 50_000)
     return dk.hex()
 
 def hash_token(raw_value: str) -> str:
@@ -44,13 +48,6 @@ def hash_token(raw_value: str) -> str:
         raw_value.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
-
-def generate_otp() -> str:
-    return "".join(secrets.choice("0123456789") for _ in range(6))
-
-def verify_otp_constant_time(input_otp: str, stored_otp_hash: str) -> bool:
-    input_hash = hash_token(input_otp.strip())
-    return secrets.compare_digest(input_hash, stored_otp_hash)
 
 def get_client_ip(request: Request) -> str:
     if settings.TRUST_PROXY:
@@ -78,10 +75,6 @@ def log_admin_activity(
     logger.info(f"AUDIT | User={actor_username} ({actor_role}) | Action={action} | Details={details} | IP={ip_address}")
 
 def seed_initial_owner() -> None:
-    """
-    Khởi tạo hoặc đồng bộ tài khoản tối cao của Người code dự án (owner) từ tệp .env.
-    Nếu bạn sửa ADMIN_USERNAME hoặc ADMIN_PASSWORD trong .env, hệ thống tự động cập nhật theo.
-    """
     username = settings.ADMIN_USERNAME
     password = settings.ADMIN_PASSWORD
     if not username or len(password) < 6:
@@ -94,7 +87,7 @@ def seed_initial_owner() -> None:
 
     with get_db() as conn:
         existing_owner = conn.execute(
-            "SELECT id, username FROM admin_users WHERE role = 'owner' LIMIT 1"
+            "SELECT id FROM admin_users WHERE role = 'owner' LIMIT 1"
         ).fetchone()
 
         if not existing_owner:
@@ -110,7 +103,7 @@ def seed_initial_owner() -> None:
                 actor_username="SYSTEM",
                 actor_role="system",
                 action="INIT_ROOT_OWNER",
-                details=f"Khởi tạo tài khoản Quản trị tối cao ({username}) từ .env",
+                details=f"Khởi tạo tài khoản Quản trị tối cao ({username})",
                 ip_address="127.0.0.1"
             )
         else:
@@ -146,41 +139,56 @@ def verify_csrf(request: Request) -> None:
             detail="Mã bảo mật CSRF không khớp. Vui lòng tải lại trang."
         )
 
-RATE_LIMIT_MAX_REQUESTS = 5
-RATE_LIMIT_WINDOW_SECONDS = 600
+# --- GIỚI HẠN MỖI NGƯỜI DÙNG TỐI ĐA 5 BÀI / 1 NGÀY (24 GIỜ) ---
+DAILY_MAX_POSTS = 5
+DAILY_WINDOW_SECONDS = 86400  # 24 giờ = 86.400 giây
 
-def check_and_record_rate_limit(ip_address: str, email_hash: str) -> None:
+def check_and_record_daily_limit(ip_address: str, device_token: str) -> int:
+    """
+    Kiểm tra mỗi người dùng (theo mã băm IP hoặc mã thiết bị) chỉ được đăng tối đa 5 bài trong 24 giờ.
+    Trả về số bài còn lại được phép đăng trong ngày.
+    """
     now = int(time.time())
-    window_start = now - RATE_LIMIT_WINDOW_SECONDS
-    ip_key = f"ip:{ip_address}"
-    email_key = f"email:{email_hash}"
+    window_start = now - DAILY_WINDOW_SECONDS
+
+    ip_key = f"ip:{hash_identifier(ip_address)}"
+    dev_key = f"dev:{hash_token(device_token)}"
 
     with get_db() as conn:
-        for key, label in [(ip_key, f"IP {ip_address}"), (email_key, f"EmailHash {email_hash[:8]}...")]:
+        for key in (ip_key, dev_key):
             rows = conn.execute(
                 "SELECT created_at FROM rate_limits WHERE identifier = ? AND created_at > ? ORDER BY created_at ASC",
                 (key, window_start)
             ).fetchall()
 
-            if len(rows) >= RATE_LIMIT_MAX_REQUESTS:
+            if len(rows) >= DAILY_MAX_POSTS:
                 oldest_timestamp = rows[0]["created_at"]
-                retry_after_seconds = max(1, (oldest_timestamp + RATE_LIMIT_WINDOW_SECONDS) - now)
-                retry_minutes = max(1, math.ceil(retry_after_seconds / 60))
+                retry_after_seconds = max(1, (oldest_timestamp + DAILY_WINDOW_SECONDS) - now)
+                hours = retry_after_seconds // 3600
+                minutes = math.ceil((retry_after_seconds % 3600) / 60)
 
-                logger.warning(f"Vượt giới hạn tần suất (429): {label}, chờ {retry_after_seconds}s")
+                time_str = f"{hours} giờ {minutes} phút" if hours > 0 else f"{minutes} phút"
+                logger.warning(f"Chạm giới hạn 5 bài/ngày (429), cần chờ {retry_after_seconds}s")
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail={
-                        "message": f"Vui lòng thử lại sau {retry_minutes} phút",
+                        "message": f"Bạn đã đăng đủ 5 bài trong ngày hôm nay. Vui lòng thử lại sau {time_str}.",
                         "retry_after_seconds": retry_after_seconds
                     }
                 )
 
         conn.execute("INSERT INTO rate_limits (identifier, created_at) VALUES (?, ?)", (ip_key, now))
-        conn.execute("INSERT INTO rate_limits (identifier, created_at) VALUES (?, ?)", (email_key, now))
+        if dev_key != ip_key:
+            conn.execute("INSERT INTO rate_limits (identifier, created_at) VALUES (?, ?)", (dev_key, now))
+
+        used_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM rate_limits WHERE identifier = ? AND created_at > ?",
+            (ip_key, window_start)
+        ).fetchone()["cnt"]
+
+    return max(0, DAILY_MAX_POSTS - used_count)
 
 def require_admin(request: Request) -> dict:
-    """Kiểm tra quyền đăng nhập cho cả Quản trị tối cao (owner) và Admin duyệt bài (moderator)."""
     raw_session = request.cookies.get("admin_session")
     if not raw_session:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Vui lòng đăng nhập để tiếp tục.")
@@ -209,12 +217,10 @@ def require_admin(request: Request) -> dict:
         return dict(row)
 
 def require_owner(request: Request) -> dict:
-    """Chỉ cho phép tài khoản tối cao của bạn (role = 'owner') thực hiện."""
     admin_user = require_admin(request)
     if admin_user["role"] != "owner":
-        logger.warning(f"Chặn Admin thường '{admin_user['username']}' truy cập chức năng Quản trị tối cao")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Chỉ Quản trị viên tối cao (Chủ dự án) mới có quyền thực hiện thao tác này."
+            detail="Chỉ Quản trị viên mới có quyền thực hiện thao tác này."
         )
     return admin_user
