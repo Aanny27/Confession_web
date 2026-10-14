@@ -6,8 +6,12 @@ from app.config import settings
 from app.security import logger
 
 def send_otp_email(recipient_email: str, otp_code: str) -> None:
+    """
+    Gửi mã xác nhận 6 số qua SMTP.
+    Nếu chưa cấu hình SMTP_USER trong .env (chế độ thử nghiệm nội bộ), in mã OTP ra màn hình console.
+    """
     if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
-        print(f"\n[CHẾ ĐỘ THỬ NGHIỆM - CHƯA CẤU HÌNH SMTP] Mã OTP xác nhận email là: {otp_code}\n")
+        print(f"\n[CHẾ ĐỘ THỬ NGHIỆM - CHƯA CẤU HÌNH SMTP] Mã OTP vừa sinh là: {otp_code}\n")
         return
 
     msg = EmailMessage()
@@ -28,6 +32,11 @@ def send_otp_email(recipient_email: str, otp_code: str) -> None:
         server.send_message(msg)
 
 def verify_turnstile_token(token: str, client_ip: str) -> bool:
+    """
+    [OWASP A04:2021 - Insecure Design] & [OWASP A10:2021 - SSRF]
+    Kiểm tra Cloudflare Turnstile chống bot (nếu bật).
+    Chỉ gọi tới địa chỉ cố định của Cloudflare, không nhận URL từ người dùng.
+    """
     if not settings.TURNSTILE_SECRET_KEY:
         return True
     if not token:
@@ -43,18 +52,22 @@ def verify_turnstile_token(token: str, client_ip: str) -> bool:
             },
             timeout=5.0
         )
-        return bool(resp.json().get("success", False))
+        data = resp.json()
+        return bool(data.get("success", False))
     except Exception as exc:
         logger.error(f"Lỗi kết nối Cloudflare Turnstile: {type(exc).__name__}")
         return False
 
 def notify_admin_new_confession(confession_id: int) -> None:
     """
-    [OWASP A10:2021 - SSRF Defense]
-    Chỉ gửi thông báo bài mới về nhóm Telegram hoặc Discord do nhóm quản lý cấu hình trong biến môi trường.
+    [OWASP A10:2021 - Server-Side Request Forgery (SSRF)]
+    Chỉ gửi thông báo đến Webhook cố định đọc từ biến môi trường (.env) và kiểm tra tên miền hợp lệ.
+    Tuyệt đối không cho phép người dùng truyền URL vào yêu cầu.
+    [OWASP A09:2021] Không gửi nội dung bài viết qua kênh bên thứ 3 nếu không cần thiết để giữ kín đáo.
     """
-    notification_text = f"📬 Có Confession mới (#{confession_id}) đang chờ ban quản lý xét duyệt!"
+    notification_text = f"📬 Có Confession mới (#{confession_id}) đang chờ duyệt trên hệ thống!"
 
+    # 1. Gửi qua Discord Webhook
     if settings.DISCORD_WEBHOOK_URL:
         parsed = urlparse(settings.DISCORD_WEBHOOK_URL)
         if parsed.scheme == "https" and parsed.netloc in ("discord.com", "discordapp.com"):
@@ -65,8 +78,9 @@ def notify_admin_new_confession(confession_id: int) -> None:
                     timeout=5.0
                 )
             except Exception as exc:
-                logger.error(f"Lỗi gửi thông báo nhóm Discord: {type(exc).__name__}")
+                logger.error(f"Lỗi gửi thông báo Discord: {type(exc).__name__}")
 
+    # 2. Gửi qua Telegram Bot
     if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID:
         tg_url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
         try:
@@ -76,4 +90,4 @@ def notify_admin_new_confession(confession_id: int) -> None:
                 timeout=5.0
             )
         except Exception as exc:
-            logger.error(f"Lỗi gửi thông báo nhóm Telegram: {type(exc).__name__}")
+            logger.error(f"Lỗi gửi thông báo Telegram: {type(exc).__name__}")
