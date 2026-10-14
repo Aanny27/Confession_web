@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quản Trị Hệ Thống Confession</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="container">
+    <header style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+      <div>
+        <h1>Quản Trị Confession</h1>
+        <p class="subtitle">
+          <a href="/" style="color: var(--primary-color);">← Về trang công khai</a>
+          <span id="current-user-badge" class="hidden"></span>
+        </p>
+      </div>
+      <button type="button" id="logout-btn" class="btn-secondary hidden">Đăng xuất</button>
+    </header>
+
+    <!-- KHUNG ĐĂNG NHẬP -->
+    <section id="login-section" class="card hidden" aria-labelledby="login-heading">
+      <h2 id="login-heading" style="margin-top: 0;">Đăng nhập Quản trị</h2>
+      <form id="admin-login-form" novalidate>
+        <div class="form-group">
+          <label for="admin-username">Tên đăng nhập</label>
+          <input type="text" id="admin-username" required autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label for="admin-password">Mật khẩu</label>
+          <input type="password" id="admin-password" required autocomplete="current-password" />
+        </div>
+        <div id="login-feedback" class="field-feedback hidden" role="alert"></div>
+        <button type="submit" id="login-btn">Đăng nhập</button>
+      </form>
+    </section>
+
+    <!-- BẢNG ĐIỀU KHIỂN -->
+    <section id="dashboard-section" class="hidden" aria-label="Bảng điều khiển quản trị">
+      <nav class="tab-nav" aria-label="Các mục quản trị">
+        <button type="button" id="tab-btn-confessions" class="tab-btn active">Duyệt Confession</button>
+        <button type="button" id="tab-btn-users" class="tab-btn hidden">Cấp quyền & Quản lý Admin (Root)</button>
+        <button type="button" id="tab-btn-logs" class="tab-btn hidden">Nhật ký hoạt động (Root)</button>
+      </nav>
+
+      <div id="admin-global-feedback" class="field-feedback hidden" role="status" aria-live="polite"></div>
+
+      <!-- TAB 1: DUYỆT CONFESSION (DÀNH CHO CẢ ROOT VÀ ADMIN THƯỜNG) -->
+      <div id="tab-panel-confessions">
+        <div class="filter-bar">
+          <div>
+            <label for="status-filter">Trạng thái</label>
+            <select id="status-filter">
+              <option value="all">Tất cả trạng thái</option>
+              <option value="pending">Đang chờ duyệt</option>
+              <option value="approved">Đã duyệt</option>
+              <option value="rejected">Đã từ chối</option>
+            </select>
+          </div>
+          <div>
+            <label for="search-input">Tìm kiếm nội dung</label>
+            <input type="text" id="search-input" placeholder="Nhập từ khoá..." />
+          </div>
+          <div style="display: flex; align-items: flex-end;">
+            <button type="button" id="filter-btn" style="width: 100%;">Lọc / Tìm kiếm</button>
+          </div>
+        </div>
+
+        <div id="admin-confessions-list" aria-live="polite"></div>
+
+        <div class="pagination">
+          <button type="button" id="admin-prev-btn" class="btn-secondary" disabled>Trang trước</button>
+          <span id="admin-page-info">Trang 1</span>
+          <button type="button" id="admin-next-btn" class="btn-secondary" disabled>Trang sau</button>
+        </div>
+      </div>
+
+      <!-- TAB 2: CẤP QUYỀN ADMIN (CHỈ MÌNH BẠN THẤY VÀ DÙNG ĐƯỢC) -->
+      <div id="tab-panel-users" class="hidden">
+        <div class="card">
+          <h2 style="margin-top: 0;">Cấp quyền Admin mới</h2>
+          <p class="helper-text" style="margin-bottom: 16px;">
+            Tài khoản được bạn tạo ở đây chỉ có quyền duyệt, từ chối hoặc xoá bài trên giao diện web; không thể quản lý người dùng khác và không truy cập được mã nguồn gốc.
+          </p>
+          <form id="create-admin-form" novalidate>
+            <div class="form-group">
+              <label for="new-admin-username">Tên tài khoản muốn cấp quyền Admin</label>
+              <input type="text" id="new-admin-username" required placeholder="Ví dụ: admin_duyetbai1" />
+            </div>
+            <div class="form-group">
+              <label for="new-admin-password">Mật khẩu cấp cho tài khoản này (tối thiểu 6 ký tự)</label>
+              <input type="text" id="new-admin-password" required minlength="6" placeholder="Nhập mật khẩu để gửi cho họ" />
+            </div>
+            <button type="submit" id="create-admin-btn">+ Cấp quyền Admin ngay</button>
+          </form>
+        </div>
+
+        <h2>Danh sách các tài khoản Admin hiện tại</h2>
+        <div id="users-list"></div>
+      </div>
+
+      <!-- TAB 3: NHẬT KÝ HOẠT ĐỘNG (CHỈ MÌNH BẠN THẤY) -->
+      <div id="tab-panel-logs" class="hidden">
+        <h2>Nhật ký hoạt động (Ai làm gì, lúc nào)</h2>
+        <div id="logs-list"></div>
+        <div class="pagination">
+          <button type="button" id="logs-prev-btn" class="btn-secondary" disabled>Trang trước</button>
+          <span id="logs-page-info">Trang 1</span>
+          <button type="button" id="logs-next-btn" class="btn-secondary" disabled>Trang sau</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>
